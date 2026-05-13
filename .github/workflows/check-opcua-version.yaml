@@ -1,0 +1,188 @@
+name: check-opcua-version
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      mock_current_version:
+        description: 'Pretend this is the current version (for testing the full pipeline). Leave empty for normal operation.'
+        required: false
+        default: ''
+
+jobs:
+  # ── Job 1 ── Detect whether a new version is available ───────────────────────
+  check-version:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      latest_version: ${{ steps.latest.outputs.version }}
+      current_version: ${{ steps.current.outputs.version }}
+      latest_major: ${{ steps.latest.outputs.major }}
+      current_major: ${{ steps.current.outputs.major }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get latest version from Cumulocity
+        id: latest
+        run: |
+          LATEST=$(curl -s https://resources.cumulocity.com/examples/opc-ua/ \
+            | grep -oP 'href="\K[0-9]+\.[0-9]+\.[0-9]+(?=/)' \
+            | sort -t. -k1,1n -k2,2n -k3,3n \
+            | tail -1)
+          if [ -z "$LATEST" ]; then
+            echo "Failed to determine latest version" >&2
+            exit 1
+          fi
+          MAJOR=$(echo "$LATEST" | cut -d. -f1)
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "Latest version: $LATEST (major: $MAJOR)"
+
+      - name: Get current version from publish.yaml
+        id: current
+        run: |
+          if [ -n "${{ inputs.mock_current_version }}" ]; then
+            CURRENT="${{ inputs.mock_current_version }}"
+            echo "Using mock current version: $CURRENT"
+          else
+            CURRENT=$(python3 .github/scripts/update_opcua_version.py --get-current)
+          fi
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "Current version: $CURRENT (major: $MAJOR)"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          LATEST="${{ steps.latest.outputs.version }}"
+          CURRENT="${{ steps.current.outputs.version }}"
+          if [ "$LATEST" = "$CURRENT" ]; then
+            echo "Already at latest version ($CURRENT), nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version available: $CURRENT -> $LATEST"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "${{ inputs.mock_current_version }}" ]; then
+            echo "(mock mode: real publish.yaml was NOT changed)"
+          fi
+
+  # ── Job 2 ── Build new images and publish to the fork's package registry ─────
+  build-and-publish:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update versions in publish.yaml
+        env:
+          LATEST: ${{ needs.check-version.outputs.latest_version }}
+          CURRENT: ${{ needs.check-version.outputs.current_version }}
+          LATEST_MAJOR: ${{ needs.check-version.outputs.latest_major }}
+          CURRENT_MAJOR: ${{ needs.check-version.outputs.current_major }}
+        run: python3 .github/scripts/update_opcua_version.py
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        if: github.actor != 'nektos/act'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push opcua-device-gateway
+        uses: docker/build-push-action@v5
+        with:
+          context: containers/opcua-device-gateway
+          push: ${{ github.actor != 'nektos/act' }}
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/opcua-device-gateway:${{ needs.check-version.outputs.latest_version }}
+            ghcr.io/${{ github.repository_owner }}/opcua-device-gateway:latest
+          build-args: |
+            VERSION=${{ needs.check-version.outputs.latest_version }}
+
+      - name: Build and push opcua-device-gateway-${{ needs.check-version.outputs.latest_major }}
+        uses: docker/build-push-action@v5
+        with:
+          context: containers/opcua-device-gateway
+          push: ${{ github.actor != 'nektos/act' }}
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/opcua-device-gateway-${{ needs.check-version.outputs.latest_major }}:${{ needs.check-version.outputs.latest_version }}
+            ghcr.io/${{ github.repository_owner }}/opcua-device-gateway-${{ needs.check-version.outputs.latest_major }}:latest
+          build-args: |
+            VERSION=${{ needs.check-version.outputs.latest_version }}
+
+      - name: Upload modified publish.yaml
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-yaml
+          path: .github/workflows/publish.yaml
+
+  # ── Job 3 ── Open PR against upstream only after a successful build ──────────
+  create-pr:
+    needs: [check-version, build-and-publish]
+    if: needs.build-and-publish.result == 'success' && github.actor != 'nektos/act' && inputs.mock_current_version == ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download modified publish.yaml
+        uses: actions/download-artifact@v4
+        with:
+          name: publish-yaml
+          path: .github/workflows/
+
+      - name: Create branch, commit, and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ needs.check-version.outputs.latest_version }}"
+          CURRENT="${{ needs.check-version.outputs.current_version }}"
+          BRANCH="update/opcua-version-${LATEST}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Skip if the branch already exists (e.g. a previous run's PR is still open)
+          if git ls-remote --exit-code origin "refs/heads/$BRANCH" > /dev/null 2>&1; then
+            echo "Branch $BRANCH already exists remotely, skipping."
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          git add .github/workflows/publish.yaml
+          git commit -m "chore: update opcua-device-gateway version to ${LATEST}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --repo thin-edge/opcua-device-gateway-container \
+            --head "${{ github.repository_owner }}:${BRANCH}" \
+            --base main \
+            --title "chore: update opcua-device-gateway version to ${LATEST}" \
+            --body "$(printf 'Automated version bump of `opcua-device-gateway`.\n\n| | Version |\n|---|---|\n| Previous | `%s` |\n| New | `%s` |\n\nPre-merge validation: built and published to `ghcr.io/%s` successfully.\n\nJAR source: https://resources.cumulocity.com/examples/opc-ua/%s/' "$CURRENT" "$LATEST" "${{ github.repository_owner }}" "$LATEST")"
