@@ -161,6 +161,9 @@ jobs:
       - name: Create branch, commit, and open PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT with `workflow` scope required to push commits that modify
+          # .github/workflows/ files — GITHUB_TOKEN cannot do this.
+          WORKFLOW_PAT: ${{ secrets.WORKFLOW_PAT }}
         run: |
           LATEST="${{ needs.check-version.outputs.latest_version }}"
           CURRENT="${{ needs.check-version.outputs.current_version }}"
@@ -168,6 +171,9 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Use the PAT as the push credential so GitHub accepts the workflow file change
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PAT}@github.com/${{ github.repository }}.git"
 
           # Skip if the branch already exists (e.g. a previous run's PR is still open)
           if git ls-remote --exit-code origin "refs/heads/$BRANCH" > /dev/null 2>&1; then
