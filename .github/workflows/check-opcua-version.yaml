@@ -181,6 +181,7 @@ jobs:
             exit 1
           fi
           git config --global credential.helper ''
+          git config --global --unset-all 'http.https://github.com/.extraheader' || true
           git remote set-url origin "https://x-access-token:${WORKFLOW_PAT}@github.com/${{ github.repository }}.git"
 
           # Skip if the branch already exists (e.g. a previous run's PR is still open)
