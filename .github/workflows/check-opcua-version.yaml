@@ -172,7 +172,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Use the PAT as the push credential so GitHub accepts the workflow file change
+          # Use the PAT as the push credential so GitHub accepts the workflow file change.
+          # Unset the credential helper first so the token embedded in the URL is used
+          # instead of the Actions runner's default GITHUB_TOKEN helper.
+          if [ -z "$WORKFLOW_PAT" ]; then
+            echo "ERROR: WORKFLOW_PAT secret is not set." >&2
+            echo "Create a fine-grained PAT with Contents+Workflows write access and store it as WORKFLOW_PAT." >&2
+            exit 1
+          fi
+          git config --global credential.helper ''
           git remote set-url origin "https://x-access-token:${WORKFLOW_PAT}@github.com/${{ github.repository }}.git"
 
           # Skip if the branch already exists (e.g. a previous run's PR is still open)
