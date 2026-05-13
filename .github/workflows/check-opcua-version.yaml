@@ -180,8 +180,9 @@ jobs:
             echo "Create a fine-grained PAT with Contents+Workflows write access and store it as WORKFLOW_PAT." >&2
             exit 1
           fi
-          git config --global credential.helper ''
+          git config --local --unset-all 'http.https://github.com/.extraheader' || true
           git config --global --unset-all 'http.https://github.com/.extraheader' || true
+          git config --global credential.helper ''
           git remote set-url origin "https://x-access-token:${WORKFLOW_PAT}@github.com/${{ github.repository }}.git"
 
           # Skip if the branch already exists (e.g. a previous run's PR is still open)
