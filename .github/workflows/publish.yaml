@@ -25,10 +25,10 @@ jobs:
           # Keep the "opcua-device-gateway" image on the latest available version
           # which should align with the Cumulocity version used on the cloud trial tenants (e.g. eu-latest.cumulocity.com)
 
-          - opcua_version: "1023.1.1"
+          - opcua_version: "1023.2.1"
             image: opcua-device-gateway
 
-          - opcua_version: "1023.1.1"
+          - opcua_version: "1023.2.1"
             image: opcua-device-gateway-1023
 
     steps:
