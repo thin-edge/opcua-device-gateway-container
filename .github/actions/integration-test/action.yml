@@ -252,7 +252,7 @@ runs:
             --device "$PUMP_ID" \
             --dateFrom "$DATE_FROM" \
             --pageSize 1 2>/dev/null \
-            | jq -r '.id // empty' | head -1)
+            | jq -r '.id // empty' | head -1 || true)
           if [ -n "$MEAS" ] && [ "$MEAS" != "null" ]; then
             echo "  Measurement received: id=$MEAS"
             echo "Test PASSED — Pump01 id=$PUMP_ID, measurements arriving."
