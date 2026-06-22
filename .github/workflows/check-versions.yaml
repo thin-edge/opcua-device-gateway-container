@@ -150,4 +150,4 @@ jobs:
 
           # Turn on auto-merge so the PR lands as soon as the required
           # integration-test check passes (via the merge queue if enabled).
-          gh pr merge "$BRANCH" --auto --squash
+          gh pr merge "$BRANCH" --auto
