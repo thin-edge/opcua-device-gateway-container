@@ -1,0 +1,78 @@
+name: promote-fork-pr
+
+# Manually promote a reviewed fork PR into a branch in THIS repo so the gated
+# integration test runs on it — forks can't run it (no access to the Cumulocity
+# secrets). Trigger from the Actions tab and enter the fork PR number.
+#
+# SECURITY: review the fork's diff BEFORE running this. Promoting it lets the
+# integration test run the fork's code with repository secrets. workflow_dispatch
+# is restricted to users with write access, so only maintainers can trigger it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Fork PR number to promote'
+        required: true
+        type: string
+
+concurrency:
+  group: promote-fork-pr-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write          # push the promoted branch
+      pull-requests: write      # open the new PR / close the old one
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PAT (not GITHUB_TOKEN) so the PR opened below triggers
+          # integration-test. PRs created with GITHUB_TOKEN don't trigger
+          # further workflow runs.
+          token: ${{ secrets.COMMUNITY_ACTIONS_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Promote the fork PR
+        env:
+          GH_TOKEN: ${{ secrets.COMMUNITY_ACTIONS_PAT || secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+
+          STATE=$(gh pr view "$PR" --json state --jq '.state')
+          [ "$STATE" = "OPEN" ] || { echo "PR #$PR is $STATE, not OPEN — aborting." >&2; exit 1; }
+
+          HEAD_REPO=$(gh pr view "$PR" \
+            --json headRepositoryOwner,headRepository \
+            --jq '.headRepositoryOwner.login + "/" + .headRepository.name')
+          if [ "$HEAD_REPO" = "${{ github.repository }}" ]; then
+            echo "PR #$PR already originates from this repo — nothing to promote." >&2
+            exit 1
+          fi
+
+          TITLE=$(gh pr view "$PR" --json title  --jq '.title')
+          AUTHOR=$(gh pr view "$PR" --json author --jq '.author.login')
+          BRANCH="promote/pr-$PR"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Fetch the fork PR head (available as pull/<n>/head on this repo) and
+          # push it as a branch here. We never execute the code — just relocate it.
+          git fetch origin "pull/$PR/head:$BRANCH"
+          git push --force origin "$BRANCH"
+
+          NEW_URL=$(gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "$TITLE" \
+            --body "$(printf 'Promoted from #%s so the integration test can run (forks have no access to the Cumulocity secrets).\n\nOriginal author: @%s' "$PR" "$AUTHOR")")
+          echo "Opened $NEW_URL"
+
+          gh pr close "$PR" \
+            --comment "Promoted to $NEW_URL so the gated integration test can run (forks can't access the Cumulocity secrets). Superseded."
+
+          echo "### Promoted #$PR → $NEW_URL" >> "$GITHUB_STEP_SUMMARY"
