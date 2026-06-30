@@ -1,9 +1,9 @@
 name: integration-test
 
 # Build the gateway image locally and run the end-to-end integration test
-# against a Cumulocity tenant. Runs on every PR to main (and on merge-queue
-# entries) and is the required status check that gates merging — including the
-# auto-merge of the version-bump PRs opened by check-versions.yaml.
+# against a Cumulocity tenant. Runs on every PR to main and is the required
+# status check that gates merging — including the auto-merge of the
+# version-bump PRs opened by check-versions.yaml.
 #
 # Versions come straight from tracked-versions.json on the PR branch, so a bump
 # PR is tested against the exact versions it proposes.
@@ -15,23 +15,17 @@ on:
       - '**/*.md'
       - 'LICENSE'
       - 'docs/**'
-  # Run on merge-queue entries so the queue can land PRs.
-  merge_group:
 
-# Per-PR concurrency so successive pushes to the same PR cancel in-flight runs;
-# each merge-queue entry gets its own ref and so runs without cancelling others.
+# Per-PR concurrency so successive pushes to the same PR cancel in-flight runs.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('integration-test-pr-{0}', github.event.pull_request.number) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: integration-test-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   integration-test:
     name: Build amd64 image locally + integration test
     # Skip PRs from forks — they have no access to the Cumulocity secrets.
-    # (merge_group has no pull_request context, so it always runs.)
-    if: >-
-      github.event_name != 'pull_request'
-      || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     env:
       BUILDX_NO_DEFAULT_ATTESTATIONS: 1
