@@ -3,9 +3,15 @@ name: publish
 # Build the multi-arch image and push it to ghcr.io on every merge to main
 # (doc-only changes excluded). Versions come from tracked-versions.json.
 #
-# DISABLED for now: the job is gated `if: false`. main is already known-good
-# (the integration test is a required check on every PR), so re-enabling is just
-# a matter of dropping the `if: false` line.
+# The `release` job then upserts the GitHub release `v{opcua}-tedge{tedge}`,
+# rolling it forward to the latest build: every main merge rebuilds the image
+# (so `latest` and the stable tag always carry the latest fix) and re-points the
+# release tag at the new commit, so `v{opcua}-tedge{tedge}` always mirrors what
+# `:{opcua}-tedge{tedge}` and `:latest` serve. The per-build tag
+# `{version}-{date}-{sha}` and the image digest are the immutable references.
+#
+# Enabled: every push to main (doc-only changes excluded) publishes. main is
+# kept known-good by the integration test, which is a required check on every PR.
 
 on:
   push:
@@ -14,6 +20,8 @@ on:
       - '**/*.md'
       - 'LICENSE'
       - 'docs/**'
+      - '.gitignore'
+      - '.gitattributes'
   workflow_dispatch:
 
 concurrency:
@@ -23,9 +31,11 @@ concurrency:
 jobs:
   publish:
     name: Publish multi-arch image to ghcr.io
-    # TODO(publish): re-enable by removing this line.
-    if: false
     runs-on: ubuntu-24.04
+    outputs:
+      version_tag: ${{ steps.build.outputs.version_tag }}
+      suffix: ${{ steps.build.outputs.suffix }}
+      digest: ${{ steps.push.outputs.digest }}
     env:
       BUILDX_NO_DEFAULT_ATTESTATIONS: 1
     permissions:
@@ -91,3 +101,74 @@ jobs:
         run: |
           # A tag can be overwritten; a digest cannot — log the immutable ref.
           echo "Pinned image ref: ghcr.io/${{ github.repository_owner }}/opcua-device-gateway@${{ steps.push.outputs.digest }}"
+
+  release:
+    name: Roll the version release to the latest build
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the tag move below resolves against this commit.
+          fetch-depth: 0
+
+      - name: Upsert release, pointing it at the latest build
+        env:
+          GH_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+          VERSION_TAG: ${{ needs.publish.outputs.version_tag }}
+          SUFFIX:      ${{ needs.publish.outputs.suffix }}
+          DIGEST:      ${{ needs.publish.outputs.digest }}
+          SHA:         ${{ github.sha }}
+          IMAGE:       ghcr.io/${{ github.repository_owner }}/opcua-device-gateway
+        run: |
+          set -e
+          TAG="v${VERSION_TAG}"
+          BUILD_TAG="${VERSION_TAG}-${SUFFIX}"
+
+          OPCUA=$(jq -r '.opcua_version' tracked-versions.json)
+          TEDGE=$(jq -r '.tedge_version' tracked-versions.json)
+
+          # The version release rolls forward to the latest build: every main
+          # merge rebuilds the image and re-points this release at the new
+          # commit, so v${VERSION_TAG} always mirrors what :${VERSION_TAG} and
+          # :latest serve. The per-build tag and the digest below are the
+          # immutable references for pinning a specific build.
+          NOTES=$(cat <<EOF
+          OPC-UA device gateway container.
+
+          - OPC-UA gateway: \`$OPCUA\`
+          - thin-edge.io: \`$TEDGE\`
+          - Commit: \`$SHA\`
+
+          ## Pull
+
+          \`\`\`
+          docker pull $IMAGE:$VERSION_TAG
+          \`\`\`
+
+          Immutable references for this build:
+
+          \`\`\`
+          docker pull $IMAGE:$BUILD_TAG
+          docker pull $IMAGE@$DIGEST
+          \`\`\`
+          EOF
+          )
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # gh release edit --target is ignored for an existing tag, so move
+            # the git tag ourselves; the release follows the tag to the new sha.
+            git tag -f "$TAG" "$SHA"
+            git push -f origin "refs/tags/$TAG"
+            gh release edit "$TAG" --target "$SHA" --notes "$NOTES"
+            echo "Rolled release $TAG to $SHA"
+          else
+            # --target points the new tag at this commit; gh creates the git tag.
+            gh release create "$TAG" \
+              --target "$SHA" \
+              --title "$TAG" \
+              --notes "$NOTES"
+            echo "Created release $TAG at $SHA"
+          fi
