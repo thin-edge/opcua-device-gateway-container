@@ -9,14 +9,16 @@
                </encoder>
 
                <!-- rollover daily or at 50MB, and cap the total so a log flood
-                    (e.g. a broken Cumulocity connection) cannot fill the disk -->
+                    (e.g. a broken Cumulocity connection) cannot fill the disk.
+                    Override via Spring Boot env vars, e.g.
+                    LOGGING_LOGBACK_ROLLINGPOLICY_TOTAL_SIZE_CAP=200MB -->
                <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
                        <fileNamePattern>/${user.home}/.opcua/log/device-agent-%d{yyyy-MM-dd}.%i.log
                        </fileNamePattern>
-                       <maxFileSize>50MB</maxFileSize>
-                       <maxHistory>3</maxHistory>
-                       <totalSizeCap>500MB</totalSizeCap>
-                       <cleanHistoryOnStart>true</cleanHistoryOnStart>
+                       <maxFileSize>${LOGBACK_ROLLINGPOLICY_MAX_FILE_SIZE:-50MB}</maxFileSize>
+                       <maxHistory>${LOGBACK_ROLLINGPOLICY_MAX_HISTORY:-3}</maxHistory>
+                       <totalSizeCap>${LOGBACK_ROLLINGPOLICY_TOTAL_SIZE_CAP:-500MB}</totalSizeCap>
+                       <cleanHistoryOnStart>${LOGBACK_ROLLINGPOLICY_CLEAN_HISTORY_ON_START:-true}</cleanHistoryOnStart>
                </rollingPolicy>
        </appender>
        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">

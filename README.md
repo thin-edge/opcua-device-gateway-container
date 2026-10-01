@@ -78,6 +78,19 @@ To
 GATEWAY_IDENTIFIER=OPCUAGateway
 ```
 
+### Logging
+
+The gateway writes its log to `/root/.opcua/log/` inside the container. Files roll over daily or at 50MB, are kept for 3 days and are capped at 500MB in total. These limits, and the log levels, can be changed with the standard Spring Boot environment variables:
+
+```yaml
+    environment:
+      - LOGGING_LOGBACK_ROLLINGPOLICY_MAX_FILE_SIZE=20MB
+      - LOGGING_LOGBACK_ROLLINGPOLICY_MAX_HISTORY=2
+      - LOGGING_LOGBACK_ROLLINGPOLICY_TOTAL_SIZE_CAP=200MB
+      - LOGGING_LOGBACK_ROLLINGPOLICY_CLEAN_HISTORY_ON_START=true
+      - LOGGING_LEVEL_COM_CUMULOCITY=WARN
+```
+
 ## Project tasks
 
 This project uses [just](https://github.com/casey/just) to run tasks.
